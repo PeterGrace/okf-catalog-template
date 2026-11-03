@@ -1,0 +1,3 @@
+# Per-session worktrees (okf.py session start)
+/.worktrees/
+__pycache__/

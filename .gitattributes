@@ -1,0 +1,4 @@
+# log.md and index.md are append-mostly lists that concurrent sessions
+# (each in its own worktree) add lines to; keep both sides instead of conflicting.
+log.md merge=union
+index.md merge=union
