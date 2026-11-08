@@ -49,6 +49,7 @@ HOOKS = [  # (event, matcher, script); a script may serve several events
     ("PostToolUse", "Skill", "okf-greenfield.py"),
     ("UserPromptSubmit", None, "okf-greenfield.py"),
     ("Stop", None, "okf-reminder.py"),
+    ("SessionEnd", None, "okf-reminder.py"),
 ]
 BEGIN, END = "<!-- okf-catalog:begin", "<!-- okf-catalog:end -->"
 

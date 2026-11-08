@@ -50,6 +50,7 @@ class MergeSettingsTest(unittest.TestCase):
         self.assertIn(self.unrelated, settings["hooks"]["PostToolUse"])
         self.assertEqual(len(self.groups_for(settings, "SessionStart", "okf-session.py")), 1)
         self.assertEqual(len(self.groups_for(settings, "Stop", "okf-reminder.py")), 1)
+        self.assertEqual(len(self.groups_for(settings, "SessionEnd", "okf-reminder.py")), 1)
         mirror = self.groups_for(settings, "PostToolUse", "okf-memory-mirror.py")
         self.assertEqual([g["matcher"] for g in mirror], ["Write|Edit|mcp__memory__save_memory"])
         green = self.groups_for(settings, "PostToolUse", "okf-greenfield.py")
