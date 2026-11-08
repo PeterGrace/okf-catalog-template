@@ -101,8 +101,14 @@ for how it is reached.
     `projects` cover its working directory, else the default one.
   - `okf-memory-mirror.py` (PostToolUse) reminds the agent whenever it
     saves a memory without touching the catalog.
-  - `okf-reminder.py` (Stop) reminds it at the end of turns that touched
-    real systems without touching the catalog.
+  - `okf-reminder.py` (Stop and SessionEnd) reminds it to record what
+    turns that touched real systems established. To save the cost of a
+    reminder every turn, it batches: it reminds once 3 such turns have
+    passed without touching the catalog, once the oldest is 20 minutes
+    old, or when the context passes 150k tokens (`OKF_REMINDER_TURNS`,
+    `OKF_REMINDER_MINUTES`, `OKF_REMINDER_CONTEXT`). A session that ends
+    with turns still unrecorded gets a line in
+    `~/.claude/okf-reminder/unrecorded.jsonl`.
   - `okf-greenfield.py` (PostToolUse on `Skill`, and UserPromptSubmit for
     typed slash commands) gives design and planning work a clean start.
     When a skill listed in `greenfield_skills` in
