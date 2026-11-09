@@ -17,6 +17,12 @@ Standard library only. Run from anywhere:
 To write, a session works in its own worktree (`session start --id ID`
 prints the path) and runs that worktree's copy of this file, so sessions
 never share a working tree.
+
+A catalog served by an okf-mcp server (`mcp` in .okf-catalog.json, set by
+`install/setup.py serve`) is read and written only through that server's
+MCP tools, and its git checkout is a frozen snapshot. Then this tool refuses
+every command except `session end|list|prune`, unless OKF_GIT_MAINTENANCE=1
+is set for deliberate maintenance of the repository machinery.
 """
 import argparse
 import json
@@ -2069,8 +2075,13 @@ def cmd_publish(a):
     if mine:
         if not a.message:
             die("there are changes to commit; pass -m MESSAGE")
-        r = git(root, "add", "-A", "--", *mine)
-        if r.returncode:
+        # A path that is in neither the working tree nor the index (the old
+        # side of a rename `mv` already staged) would fail `git add`; the
+        # pathspec commit below still records its deletion.
+        indexed = set(git(root, "ls-files", "-z", "--", *mine).stdout.split("\0"))
+        addable = [p for p in mine if p in indexed or os.path.lexists(os.path.join(root, p))]
+        r = git(root, "add", "-A", "--", *addable) if addable else None
+        if r and r.returncode:
             die("git add failed:\n" + r.stderr)
         # A pathspec commit takes only these paths, even if another session
         # has staged something else.
@@ -2363,7 +2374,36 @@ def main(argv=None):
     if getattr(a, "action", None) in ("start", "end") and not a.id:
         ap.error("session start/end need --id")
     a.root = os.path.abspath(getattr(a, "root", DEFAULT_ROOT))
+    refuse_if_served(a)
     a.fn(a)
+
+
+# Commands a frozen checkout still allows: cleaning up worktrees made before it froze.
+FROZEN_ALLOWED = {("session", "end"), ("session", "list"), ("session", "prune")}
+
+
+def served_by(root):
+    """The okf-mcp settings ({"server", "catalog"}) in root's .okf-catalog.json, or None."""
+    try:
+        with open(os.path.join(root, ".okf-catalog.json"), encoding="utf-8") as fh:
+            mcp = json.load(fh).get("mcp")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return mcp if isinstance(mcp, dict) and mcp.get("catalog") else None
+
+
+def refuse_if_served(a):
+    """Stop unless this catalog is git-only, the command is allowed, or maintenance is on."""
+    mcp = served_by(a.root)
+    if not mcp or (a.cmd, getattr(a, "action", None)) in FROZEN_ALLOWED:
+        return
+    if os.environ.get("OKF_GIT_MAINTENANCE") == "1":
+        return
+    server = mcp.get("server") or "okf-mcp"
+    die(f"this checkout is a frozen snapshot: the catalog is served as catalog "
+        f"{mcp['catalog']!r} by the {server} MCP server. Read and write it with the "
+        f"mcp__{server}__* tools instead. To maintain the repository machinery (AGENTS.md, "
+        "install/, tools/) here, set OKF_GIT_MAINTENANCE=1.")
 
 
 if __name__ == "__main__":

@@ -56,7 +56,7 @@ def main():
 
     transcript = data.get("transcript_path")
     if transcript and os.path.exists(transcript):
-        if any(okf_catalogs.mentions(catalog, u.get("input", {})) for u in current_turn_tool_uses(transcript)):
+        if any(okf_catalogs.touches(catalog, u) for u in current_turn_tool_uses(transcript)):
             return
 
     owner = catalog["owner"]
@@ -64,10 +64,10 @@ def main():
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",
             "additionalContext": (
-                f"You just saved a memory ({what}). The knowledge catalog at {catalog['path']} is the "
-                "primary memory store: record the same fact there too, in the matching concept "
+                f"You just saved a memory ({what}). The knowledge catalog is the primary memory "
+                "store: record the same fact there too, in the matching concept "
                 f"(facts about {owner} and how they want you to work go in {catalog['owner_concept']}), "
-                "using tools/okf.py for stamping, log, index and publish. Skip it only if the "
+                f"in {okf_catalogs.how_to_write(catalog)}. Skip it only if the "
                 "fact is a secret, already in the catalog, or outside the catalog's scope "
                 f"({catalog['scope']})."
             ),

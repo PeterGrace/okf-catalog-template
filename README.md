@@ -18,6 +18,10 @@ It includes:
   - `okf-review-oldest` re-verifies the stalest concept;
   - `okf-reorganize` splits catch-all concepts;
   - `okf-link-check` fixes the link graph.
+
+  Their okf-mcp versions, plus `okf-daily-maintenance`, are in
+  `install/skills/` (copied from okf-mcp's `skills/`) for a catalog served
+  by an okf-mcp server.
 - **`install/`:** a one-time `init` that fills in your details, and an
   `install` that wires a machine's Claude Code to the catalog. The
   `install` adds four hooks and a block in `~/.claude/CLAUDE.md`.
@@ -70,6 +74,20 @@ Claude to work without the catalog unless you ask, and to keep your private
 details out of specs, plans and code. Choose the skills with
 `"greenfield_skills": [...]` in `~/.claude/okf-catalogs.json`; an empty
 list turns it off.
+
+## Serving the catalog from okf-mcp
+
+An [okf-mcp](https://github.com/PeterGrace/okf_mcp) server can take over
+as the catalog's source of truth. Agents then read and write it through
+MCP tools instead of git worktrees, and harnesses without a filesystem can
+use it too. `install/setup.py serve --catalog NAME [--server okf-mcp]`
+switches a catalog over. It records the server in `.okf-catalog.json`,
+installs the okf-mcp `AGENTS.md`, and freezes the checkout: `tools/okf.py`
+then refuses to run there unless `OKF_GIT_MAINTENANCE=1`. Afterwards,
+`install` sets each machine up for the MCP workflow. A machine can mix
+served and git catalogs.
+[docs/okf-mcp.md](docs/okf-mcp.md) is the step-by-step guide, including
+how to move a catalog made from an older version of this template.
 
 ## Things to decide for your catalog
 

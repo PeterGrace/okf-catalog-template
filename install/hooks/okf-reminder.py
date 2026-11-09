@@ -137,18 +137,18 @@ def touches_real_systems(use):
 
 
 def touches_catalog(catalog, use):
-    return okf_catalogs.mentions(catalog, use.get("input", {}))
+    return okf_catalogs.touches(catalog, use)
 
 
 def write_hint(catalog):
-    return (f"{catalog['path']} following its AGENTS.md, using tools/okf.py for "
-            "stamping, log, index and publish")
+    return f"{okf_catalogs.how_to_write(catalog)}, following its AGENTS.md"
 
 
 def session_catalog(data):
     catalogs, _ = okf_catalogs.load()
     cwd = os.path.realpath(data.get("cwd") or os.getcwd())
-    if any(cwd == c["path"] or cwd.startswith(c["path"] + os.sep) for c in catalogs):
+    if any((cwd == c["path"] or cwd.startswith(c["path"] + os.sep)) and not okf_catalogs.served(c)
+           for c in catalogs):
         return None
     return okf_catalogs.select(cwd, catalogs)
 
