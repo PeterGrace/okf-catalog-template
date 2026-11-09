@@ -3,6 +3,7 @@
 
     python3 install/setup.py init --owner jdoe --scope "my work at Acme" [--name "Acme knowledge"]
     python3 install/setup.py install [--projects ~/work ~/repos/acme-*] [--default]
+    python3 install/setup.py serve --catalog acme [--server okf-mcp]
     python3 install/setup.py status
 
 `init` runs once, in a fresh clone: it fills in the {{...}} placeholders in
@@ -16,9 +17,19 @@ the catalog's identity in .okf-catalog.json. Commit and push the result.
     sessions anywhere else (--default),
   - adds the hooks to ~/.claude/settings.json without touching other entries,
   - writes the catalog instructions into ~/.claude/CLAUDE.md between
-    okf-catalog markers, replacing an older copy of the same block.
+    okf-catalog markers, replacing an older copy of the same block,
+  - and, for a catalog served by okf-mcp, copies the MCP versions of the
+    okf-* skills (install/skills/) to ~/.claude/skills/.
 Running it again is safe. Several catalogs can be installed on one machine;
 each session uses the one that covers its working directory.
+
+`serve` runs once, when the catalog moves to an okf-mcp server: it records
+the server and the catalog's name there in .okf-catalog.json, replaces
+AGENTS.md with its okf-mcp version (install/AGENTS-mcp.md) and removes the
+git-workflow skills from .claude/skills/. Commit and push the result, import
+the catalog into the server, then run `install` again on every machine.
+From then on tools/okf.py refuses to work in the checkout. See
+docs/okf-mcp.md.
 
 Standard library only.
 """
@@ -52,6 +63,12 @@ HOOKS = [  # (event, matcher, script); a script may serve several events
     ("SessionEnd", None, "okf-reminder.py"),
 ]
 BEGIN, END = "<!-- okf-catalog:begin", "<!-- okf-catalog:end -->"
+# A section of CLAUDE-block.md kept only when some installed catalog uses that workflow.
+WORKFLOW_RE = re.compile(r"<!-- okf-catalog:if (git|mcp) -->\n(.*?)<!-- okf-catalog:endif \1 -->\n",
+                         re.S)
+SKILLS_DIR = os.path.join(CLAUDE_DIR, "skills")
+DEFAULT_SERVER = "okf-mcp"
+NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def die(msg):
@@ -178,6 +195,10 @@ def register(a):
         entry = {"path": tilde(path)}
         catalogs.append(entry)
     entry.update({k: identity[k] for k in ("name", "owner", "scope")})
+    if identity.get("mcp"):
+        entry["mcp"] = identity["mcp"]
+    else:
+        entry.pop("mcp", None)
     if a.projects is not None:
         entry["projects"] = [tilde(os.path.abspath(os.path.expanduser(p))) if "*" not in p else p
                              for p in a.projects]
@@ -221,9 +242,45 @@ def merge_settings(config):
         print(f"hooks added to {tilde(SETTINGS)}")
 
 
-def write_claude_md():
+def claude_block(config):
+    """The CLAUDE.md block, keeping only the workflows the installed catalogs use."""
     with open(os.path.join(INSTALL, "CLAUDE-block.md")) as f:
-        block = f.read().strip() + "\n"
+        block = f.read()
+    served = [bool(c.get("mcp")) for c in config.get("catalogs", [])]
+    used = {"mcp"} if all(served) and served else {"git"} if not any(served) else {"git", "mcp"}
+    return WORKFLOW_RE.sub(lambda m: m.group(2) if m.group(1) in used else "", block).strip() + "\n"
+
+
+def install_skills(entry):
+    """Copy the okf-mcp skills to ~/.claude/skills/ for a served catalog, naming its server."""
+    if not entry.get("mcp"):
+        return
+    server = entry["mcp"].get("server") or DEFAULT_SERVER
+    src_root = os.path.join(INSTALL, "skills")
+    for name in sorted(os.listdir(src_root)):
+        dst_dir = os.path.join(SKILLS_DIR, name)
+        if os.path.islink(dst_dir):
+            print(f"skill {tilde(dst_dir)} is a symlink; left as it is")
+            continue
+        for dirpath, _, files in os.walk(os.path.join(src_root, name)):
+            for fname in files:
+                src = os.path.join(dirpath, fname)
+                dst = os.path.join(dst_dir, os.path.relpath(src, os.path.join(src_root, name)))
+                with open(src) as f:
+                    new = f.read().replace("mcp__okf-mcp__", f"mcp__{server}__")
+                if os.path.exists(dst):
+                    with open(dst) as f:
+                        if f.read() == new:
+                            continue
+                    shutil.copy2(dst, dst + ".bak")
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                with open(dst, "w") as f:
+                    f.write(new)
+                print(f"skill {tilde(dst)} installed")
+
+
+def write_claude_md(config):
+    block = claude_block(config)
     try:
         with open(CLAUDE_MD) as f:
             text = f.read()
@@ -250,9 +307,58 @@ def write_claude_md():
 def cmd_install(a):
     install_hooks()
     config = register(a)
+    path = catalog_path()
+    entry = next(c for c in config["catalogs"]
+                 if os.path.realpath(os.path.expanduser(c["path"])) == path)
+    install_skills(entry)
     merge_settings(config)
-    write_claude_md()
+    write_claude_md(config)
     print("\nDone. New Claude Code sessions pick it up; restart running ones (or open /hooks once).")
+
+
+def cmd_serve(a):
+    identity = load_json(IDENTITY, None)
+    if not identity:
+        die("this catalog isn't initialized; run `setup.py init` first")
+    for flag, value in (("--catalog", a.catalog), ("--server", a.server)):
+        if not NAME_RE.fullmatch(value):
+            die(f"{flag} must be a name such as acme (letters, digits, '.', '_', '-')")
+    identity["mcp"] = {"server": a.server, "catalog": a.catalog}
+    values = {
+        "CATALOG": tilde(catalog_path()),
+        "OWNER": identity["owner"],
+        "SCOPE": identity["scope"],
+        "NAME": identity["name"],
+        "MCP_SERVER": a.server,
+        "MCP_CATALOG": a.catalog,
+    }
+    # A catalog older than this template version gets its new tools/okf.py by
+    # checking it out from the template; fill in its placeholders here too.
+    okf = os.path.join(REPO, "tools", "okf.py")
+    with open(okf) as f:
+        text = f.read()
+    if "{{" in text:
+        with open(okf, "w") as f:
+            f.write(fill(text, values))
+        print("filled tools/okf.py")
+    with open(os.path.join(INSTALL, "AGENTS-mcp.md")) as f:
+        agents = fill(f.read(), values)
+    with open(os.path.join(REPO, "AGENTS.md"), "w") as f:
+        f.write(agents)
+    print("replaced AGENTS.md with its okf-mcp version; carry over any rules you had added "
+          "(git diff AGENTS.md)")
+    skills = os.path.join(REPO, ".claude", "skills")
+    for name in sorted(os.listdir(skills)) if os.path.isdir(skills) else []:
+        if name.startswith("okf-"):
+            shutil.rmtree(os.path.join(skills, name))
+            print(f"removed .claude/skills/{name} (the okf-mcp versions install to ~/.claude/skills/)")
+    with open(IDENTITY, "w") as f:
+        json.dump(identity, f, indent=2)
+        f.write("\n")
+    print(f"recorded server {a.server!r}, catalog {a.catalog!r} in .okf-catalog.json\n\n"
+          "Next (docs/okf-mcp.md): commit and push; import this commit into the server "
+          f"(git archive --format=tar.gz HEAD | okf-mcp import {a.catalog} -); then run "
+          f"`python3 {tilde(catalog_path())}/install/setup.py install` on every machine.")
 
 
 def cmd_status(a):
@@ -263,7 +369,10 @@ def cmd_status(a):
         die("hooks aren't installed on this machine; run `setup.py install`")
     catalogs, _ = okf_catalogs.load()
     for c in catalogs:
-        print(f"{'*' if c.get('default') else ' '} {c['name']}: {tilde(c['path'])} "
+        mcp = okf_catalogs.served(c)
+        where = (f"okf-mcp catalog {mcp['catalog']} on {mcp['server']}" if mcp
+                 else tilde(c["path"]))
+        print(f"{'*' if c.get('default') else ' '} {c['name']}: {where} "
               f"(owner {c['owner']}; {c['scope']}) projects={c.get('projects') or []}")
     cwd = a.cwd or os.getcwd()
     chosen = okf_catalogs.select(cwd, catalogs)
@@ -286,6 +395,11 @@ def main():
     p.add_argument("--memory-tool", nargs="*", metavar="TOOL",
                    help="MCP memory tools to mirror into the catalog, e.g. mcp__memory__save_memory")
     p.set_defaults(fn=cmd_install)
+    p = sub.add_parser("serve", help="move this catalog to an okf-mcp server (once, in the catalog)")
+    p.add_argument("--catalog", required=True, help="the catalog's name on the server, e.g. acme")
+    p.add_argument("--server", default=DEFAULT_SERVER,
+                   help=f"the server's name in Claude Code's MCP config (default {DEFAULT_SERVER})")
+    p.set_defaults(fn=cmd_serve)
     p = sub.add_parser("status", help="list installed catalogs and which one a directory uses")
     p.add_argument("cwd", nargs="?", help="directory to check (default: current)")
     p.set_defaults(fn=cmd_status)
